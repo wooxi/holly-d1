@@ -1,0 +1,16 @@
+{
+	"compatibility_date": "2025-10-08",
+	"main": "src/index.ts",
+	"name": "holly-d1",
+	"upload_source_maps": true,
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_id": "df162ac6-d7c1-40c8-91b2-49ad53472c0d",
+			"database_name": "callSave"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+}
