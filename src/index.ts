@@ -1,14 +1,117 @@
-import { renderHtml } from "./renderHtml";
+// 定义环境变量接口
+interface Env {
+  DB: callSave; // D1 数据库绑定名称
+}
+
+// 内存缓存，用于存储已处理的 CallSheetID
+const processedRequests = new Map();
 
 export default {
-	async fetch(request, env) {
-		const stmt = env.DB.prepare("SELECT * FROM comments LIMIT 3");
-		const { results } = await stmt.all();
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    try {
+      const url = new URL(request.url);
+      const path = url.pathname;
+      const method = request.method;
 
-		return new Response(renderHtml(JSON.stringify(results, null, 2)), {
-			headers: {
-				"content-type": "text/html",
-			},
-		});
-	},
-} satisfies ExportedHandler<Env>;
+      // 检查路径和方法
+      if (path !== "/save" || method !== "GET") {
+        return new Response("Invalid request method or path", {
+          status: 405,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
+
+      // 解析查询参数
+      const queryParams = Object.fromEntries(url.searchParams.entries());
+
+      // 获取唯一标识符 CallSheetID
+      const callSheetID = queryParams.CallSheetID;
+      if (!callSheetID) {
+        return new Response("Missing CallSheetID", {
+          status: 400,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
+
+      // 检查是否为重复请求
+      if (processedRequests.has(callSheetID)) {
+        console.log(`Duplicate request detected for CallSheetID: ${callSheetID}`);
+        return new Response("success", {
+          status: 200,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
+
+      // 标记为已处理，并设置过期时间（例如 5 分钟）
+      processedRequests.set(callSheetID, true);
+      setTimeout(() => processedRequests.delete(callSheetID), 5 * 60 * 1000);
+
+      // 异步存储数据到 D1 数据库
+      ctx.waitUntil(saveToDatabase(queryParams, env));
+
+      // 立即返回字符串 "success"
+      return new Response("success", {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      });
+    } catch (error) {
+      console.error("Error handling request:", error);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
+  },
+};
+
+// 存储数据到 D1 数据库
+async function saveToDatabase(data: Record<string, string>, env: Env) {
+  try {
+    const callSheetID = data.CallSheetID;
+
+    // 清理和验证数据
+    const cleanedData = cleanAndValidateData(data);
+
+    // 打印生成的 JSON 数据到日志
+    console.log("Generated JSON data for CallSheetID:", callSheetID);
+    console.log("cleanedData:", cleanedData);
+
+    // 插入数据到指定表（使用普通 SQL 查询代替预处理语句）
+    const tableName = "CallSheetData"; // 表名固定
+    const query = `
+      INSERT INTO ${tableName} (CallSheetID, Data)
+      VALUES (?, ?)
+    `;
+    // 使用 prepare 和 bind 方法执行查询
+    const result = await env.DB.prepare(query).bind(callSheetID, cleanedData).run();
+
+    // 如果插入失败（主键冲突），记录日志并丢弃数据
+    if (result.meta && result.meta.rows_affected === 0) {
+      console.log(`CallSheetID already exists: ${callSheetID}. Data discarded.`);
+    }
+  } catch (error) {
+    // 如果是主键冲突错误，记录日志并丢弃数据
+    if (error.message.includes("UNIQUE constraint failed")) {
+      console.log(`CallSheetID already exists: ${data.CallSheetID}. Data discarded.`);
+    } else {
+      console.error("Error saving data to D1 database:", error);
+    }
+  }
+}
+
+// 清理和验证数据
+function cleanAndValidateData(data: Record<string, string>): string {
+  try {
+    // 转换为 JSON 字符串
+    const jsonData = JSON.stringify(data);
+
+    // 验证 JSON 是否合法
+    JSON.parse(jsonData);
+
+    // 返回清理后的 JSON 数据
+    return jsonData;
+  } catch (error) {
+    console.error("Invalid data format:", data);
+    throw new Error("Failed to clean and validate data");
+  }
+}
